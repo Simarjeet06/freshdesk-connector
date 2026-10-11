@@ -1,0 +1,494 @@
+{
+  "server": {
+    "name": "freshdesk",
+    "version": "0.1.0",
+    "instructions": "Read-only access to the merchant's Freshdesk helpdesk (support tickets, conversations, contacts).\n\nChoosing a tool:\n- Know the ticket ID -> get_ticket (add include_conversations for the thread).\n- Filter by status/priority/tag/type/date -> search_tickets.\n- \"Latest tickets\" or \"tickets from this customer email\" -> list_tickets.\n- Know a customer's email/phone -> find_contacts, then list_tickets(requester_id=...).\n\nThis connector cannot create, reply to, update, assign, merge or delete anything. If the user\nasks for a change, say so and give them the ticket's `url` to act on it in Freshdesk.\nResults are paginated: when `next_page` is not null and the user needs more, call again with\npage=next_page. Don't fetch every page by default; each call spends the merchant's shared\nFreshdesk API quota.\n"
+  },
+  "tools": [
+    {
+      "name": "list_tickets",
+      "description": "List helpdesk tickets, newest first. Use for browsing recent tickets or all tickets of one customer.\n    For filtering by status, priority, tag or type use search_tickets instead.",
+      "inputSchema": {
+        "properties": {
+          "updated_since": {
+            "anyOf": [
+              {
+                "description": "Date as YYYY-MM-DD",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only tickets updated on/after this date (YYYY-MM-DD). Without it, Freshdesk returns only tickets created in the last 30 days.",
+            "title": "Updated Since"
+          },
+          "requester_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only tickets raised by this exact email address.",
+            "title": "Requester Email"
+          },
+          "requester_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only tickets raised by this contact ID.",
+            "title": "Requester Id"
+          },
+          "order_by": {
+            "default": "updated_at",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "due_by",
+              "status"
+            ],
+            "title": "Order By",
+            "type": "string"
+          },
+          "order_type": {
+            "default": "desc",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "title": "Order Type",
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "1-based page number. Use the next_page value from a previous call.",
+            "maximum": 300,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Results per page (max 100).",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Per Page",
+            "type": "integer"
+          },
+          "include_description": {
+            "default": false,
+            "description": "Include each ticket's text body. Costs extra Freshdesk API credits per call.",
+            "title": "Include Description",
+            "type": "boolean"
+          }
+        },
+        "title": "list_ticketsArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "list_ticketsDictOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "get_ticket",
+      "description": "Get one ticket in full: subject, body, status, priority, tags, SLA due dates, requester details, timing stats and (optionally) the conversation thread.",
+      "inputSchema": {
+        "properties": {
+          "ticket_id": {
+            "description": "Freshdesk ticket ID (the number in #123).",
+            "minimum": 1,
+            "title": "Ticket Id",
+            "type": "integer"
+          },
+          "include_conversations": {
+            "default": true,
+            "description": "Include up to the first 10 replies/notes. Use list_ticket_conversations for longer threads.",
+            "title": "Include Conversations",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ticket_id"
+        ],
+        "title": "get_ticketArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "get_ticketDictOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "list_ticket_conversations",
+      "description": "List the full conversation thread of a ticket (customer messages and agent replies, oldest first), 30 per page.\n    Internal private notes are hidden unless the operator has enabled them.",
+      "inputSchema": {
+        "properties": {
+          "ticket_id": {
+            "description": "Freshdesk ticket ID.",
+            "minimum": 1,
+            "title": "Ticket Id",
+            "type": "integer"
+          },
+          "page": {
+            "default": 1,
+            "description": "1-based page number. Use the next_page value from a previous call.",
+            "maximum": 300,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ticket_id"
+        ],
+        "title": "list_ticket_conversationsArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "list_ticket_conversationsDictOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "search_tickets",
+      "description": "Search tickets by structured filters (all filters are combined with AND; list values are OR'd).\n    Example: open or pending, urgent, tagged 'refund' -> status=['open','pending'], priority=['urgent'], tags=['refund'].\n    Returns total_matches so you can report counts without fetching every page.\n    Note: Freshdesk's search index can lag a few minutes behind very recent changes.",
+      "inputSchema": {
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "open",
+                    "pending",
+                    "resolved",
+                    "closed"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Match any of these statuses.",
+            "title": "Status"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "urgent"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Match any of these priorities.",
+            "title": "Priority"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Match tickets having any of these tags, e.g. ['refund'].",
+            "title": "Tags"
+          },
+          "ticket_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Ticket type exactly as configured in Freshdesk, e.g. 'Refund', 'Question'.",
+            "title": "Ticket Type"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Assigned agent ID.",
+            "title": "Agent Id"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Assigned group ID.",
+            "title": "Group Id"
+          },
+          "created_after": {
+            "anyOf": [
+              {
+                "description": "Date as YYYY-MM-DD",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Created on/after (YYYY-MM-DD).",
+            "title": "Created After"
+          },
+          "created_before": {
+            "anyOf": [
+              {
+                "description": "Date as YYYY-MM-DD",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Created on/before (YYYY-MM-DD).",
+            "title": "Created Before"
+          },
+          "updated_after": {
+            "anyOf": [
+              {
+                "description": "Date as YYYY-MM-DD",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Updated on/after (YYYY-MM-DD).",
+            "title": "Updated After"
+          },
+          "due_before": {
+            "anyOf": [
+              {
+                "description": "Date as YYYY-MM-DD",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Resolution due on/before (YYYY-MM-DD). Good for finding SLA risks.",
+            "title": "Due Before"
+          },
+          "page": {
+            "default": 1,
+            "description": "Page 1-10; 30 results per page. Freshdesk caps search at 300 results.",
+            "maximum": 10,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          }
+        },
+        "title": "search_ticketsArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "search_ticketsDictOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "get_contact",
+      "description": "Get a customer (contact) profile: name, email, phone, company, tags and custom fields.",
+      "inputSchema": {
+        "properties": {
+          "contact_id": {
+            "description": "Freshdesk contact ID (e.g. a ticket's requester_id).",
+            "minimum": 1,
+            "title": "Contact Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "contact_id"
+        ],
+        "title": "get_contactArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "get_contactDictOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "find_contacts",
+      "description": "Look up customers by exact email, phone or mobile number. Use the returned id with list_tickets(requester_id=...).",
+      "inputSchema": {
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exact email address.",
+            "title": "Email"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exact phone number as stored in Freshdesk.",
+            "title": "Phone"
+          },
+          "mobile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exact mobile number as stored in Freshdesk.",
+            "title": "Mobile"
+          },
+          "page": {
+            "default": 1,
+            "description": "1-based page number. Use the next_page value from a previous call.",
+            "maximum": 300,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          }
+        },
+        "title": "find_contactsArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "find_contactsDictOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "connector_status",
+      "description": "Check that the Freshdesk connection works and report the remaining API quota. Use when other tools fail with auth or rate-limit errors.",
+      "inputSchema": {
+        "properties": {},
+        "title": "connector_statusArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "connector_statusDictOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    }
+  ]
+}
